@@ -1,0 +1,5 @@
+__pycache__/
+ideas.txt
+# Already trained models
+*.keras 
+.venv
