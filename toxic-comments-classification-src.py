@@ -15,7 +15,6 @@ from typing import List, Dict, Set, Tuple
 import json
 
 from tqdm import tqdm
-
 tqdm.pandas()
 
 pd.options.display.max_colwidth = 100
@@ -1590,7 +1589,7 @@ class CombinedFeatureExtractor:
 extractor = CombinedFeatureExtractor()
 
 # Process your data
-train_features = extractor.process_dataframe(train_normalized.head(5000))
+train_features = extractor.process_dataframe(train_normalized)
 
 # Look at new features
 new_columns = set(train_features.columns) - set(train_normalized.columns)
@@ -1621,7 +1620,6 @@ train_features.to_pickle("combined_features.pkl")
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
-
 train = pd.read_csv("data/train.csv")
 
 # Split data into toxic and non-toxic
@@ -1633,17 +1631,19 @@ print(f"Toxic comments: {len(toxic_comments)}")
 print(f"Non-toxic comments: {len(non_toxic_comments)}")
 
 # %%
-# TODO: FIX WITH SAVING LOGIC!
-
+# Create train/validation split
+from sklearn.model_selection import train_test_split
 from transformers import AutoTokenizer, AutoModel
 import torch
-
+import os
+import numpy as np
+import pandas as pd
 
 class EmbeddingProcessor:
     def __init__(self):
         self.tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
         self.model = AutoModel.from_pretrained("bert-base-uncased")
-        self.max_length = 128  # Can be adjusted based on your needs
+        self.max_length = 128
 
     def get_embeddings(self, df, batch_size=32):
         embeddings = []
@@ -1669,13 +1669,65 @@ class EmbeddingProcessor:
 
             embeddings.append(batch_embeddings)
 
+            if (i + batch_size) % 500 == 0:
+                print(f"Processed {i + batch_size}/{len(df)} texts")
+
         return np.vstack(embeddings)
 
+class EnhancedEmbeddingProcessor(EmbeddingProcessor):
+    def get_embeddings(self, df, save_path="embeddings.npy", batch_size=32):
+        # Change file extension to .npy for numpy arrays
+        if os.path.exists(save_path):
+            print("Loading pre-computed embeddings...")
+            embeddings = np.load(save_path)
+            if len(embeddings) == len(df):
+                return embeddings
+            else:
+                print("Saved embeddings don't match current data. Recomputing...")
 
-# Apply to your data
-processor = EmbeddingProcessor()
-print("Processing embeddings...")
-train_embeddings = processor.get_embeddings(train.head(4000))
+        print("Computing new embeddings...")
+        embeddings = super().get_embeddings(df, batch_size)
+
+        # Save embeddings using numpy
+        print(f"Saving embeddings to {save_path}")
+        np.save(save_path, embeddings)
+
+        return embeddings
+
+
+def prepare_training_data(df, embeddings, test_size=0.2):
+    # Prepare labels (all toxic categories)
+    labels = df[
+        ["toxic", "severe_toxic", "obscene", "threat", "insult", "identity_hate"]
+    ].values
+
+    # Create stratified split
+    X_train, X_val, y_train, y_val = train_test_split(
+        embeddings,
+        labels,
+        test_size=test_size,
+        random_state=42,
+        stratify=labels[:, 0],  # Stratify on 'toxic' column
+    )
+
+    return X_train, X_val, y_train, y_val
+
+
+# Process the data
+# TODO: Fix the size of the data
+processor = EnhancedEmbeddingProcessor()
+train_embeddings = processor.get_embeddings(
+    train.head(2000), save_path="train_embeddings-2000.npy"
+)
+
+X_train, X_val, y_train, y_val = prepare_training_data(
+    train.head(2000), train_embeddings
+)
+
+print("Training set shape:", X_train.shape)
+print("Validation set shape:", X_val.shape)
+print("Training labels shape:", y_train.shape)
+print("Validation labels shape:", y_val.shape)
 
 # %%
 import numpy as np
@@ -1683,7 +1735,7 @@ from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 
 # Analyze embeddings distribution between toxic and non-toxic comments
-toxic_mask = train.head(4000)["toxic"] == 1
+toxic_mask = train["toxic"] == 1
 toxic_embeddings = train_embeddings[toxic_mask]
 non_toxic_embeddings = train_embeddings[~toxic_mask]
 
@@ -1710,7 +1762,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 
 # Create TF-IDF features
 tfidf = TfidfVectorizer(max_features=1000, ngram_range=(1, 2))
-tfidf_features = tfidf.fit_transform(train.head(4000)["comment_text"]).toarray()
+tfidf_features = tfidf.fit_transform(train["comment_text"]).toarray()
 
 print("TF-IDF features shape:", tfidf_features.shape)
 
@@ -1726,7 +1778,7 @@ import seaborn as sns
 
 # 1. First, let's use a Random Forest to get feature importance
 rf_classifier = RandomForestClassifier(n_estimators=100, random_state=42)
-rf_classifier.fit(train_embeddings, train.head(4000)["toxic"])
+rf_classifier.fit(train_embeddings, train["toxic"])
 
 # Get feature importances
 importances = rf_classifier.feature_importances_
@@ -1747,7 +1799,7 @@ plt.show()
 
 # 2. Let's analyze the correlation between embeddings and toxicity
 correlations = []
-toxic_labels = train.head(4000)["toxic"].values
+toxic_labels = train["toxic"].values
 
 for i in range(train_embeddings.shape[1]):
     correlation = np.corrcoef(train_embeddings[:, i], toxic_labels)[0, 1]
@@ -1818,9 +1870,9 @@ def analyze_patterns():
     # Create DataFrame with texts and their scores
     analysis_df = pd.DataFrame(
         {
-            "text": train.head(4000)["comment_text"],
+            "text": train["comment_text"],
             "toxic_score": toxic_scores,
-            "is_toxic": train.head(4000)["toxic"],
+            "is_toxic": train["toxic"],
         }
     )
 
@@ -1878,9 +1930,6 @@ def interpret_important_features(text_examples):
             print(f"  {word}: {weight:.4f}")
 
 
-# First let's look at our data types
-print("Type of correct_toxics:", type(correct_toxics))
-
 # Get some example texts that were correctly classified
 correct_toxics = analysis_results[
     (analysis_results["is_toxic"] == 1) & (analysis_results["toxic_score"] > 0.9)
@@ -1889,22 +1938,18 @@ correct_toxics = analysis_results[
 interpret_important_features(correct_toxics[:3])  # Take first 3 examples
 
 # %% [markdown]
-# ### Missclassified
+# ### Misclassified
 
 
 # %%
 def analyze_errors():
     # Get predictions and actual values
     predictions = rf_classifier.predict(train_embeddings)
-    actual = train.head(4000)["toxic"].values
+    actual = train["toxic"].values
 
     # Create DataFrame for easier analysis
     error_analysis_df = pd.DataFrame(
-        {
-            "text": train.head(4000)["comment_text"],
-            "predicted": predictions,
-            "actual": actual,
-        }
+        {"text": train["comment_text"], "predicted": predictions, "actual": actual}
     )
 
     # Find misclassified examples
@@ -1960,9 +2005,9 @@ def analyze_prediction_confidence():
     # Create DataFrame with predictions and actual values
     confidence_df = pd.DataFrame(
         {
-            "text": train.head(4000)["comment_text"],
+            "text": train["comment_text"],
             "toxic_probability": probabilities[:, 1],  # Probability of being toxic
-            "actual": train.head(4000)["toxic"],
+            "actual": train["toxic"],
         }
     )
 
@@ -2008,5 +2053,215 @@ def analyze_high_confidence_cases():
         print(f"Predicted Probability: {row['toxic_probability']:.3f}")
         print(f"Actual: {'Toxic' if row['actual'] == 1 else 'Non-toxic'}")
 
-
 analyze_high_confidence_cases()
+
+# %%
+import numpy as np
+import pandas as pd
+from sklearn.metrics import (
+    classification_report,
+    roc_auc_score,
+    confusion_matrix,
+    roc_curve,
+)
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.ensemble import RandomForestClassifier
+
+
+class ToxicityModelEvaluator:
+    def __init__(
+        self,
+        category_names=[
+            "toxic",
+            "severe_toxic",
+            "obscene",
+            "threat",
+            "insult",
+            "identity_hate",
+        ],
+    ):
+        self.category_names = category_names
+
+    def train_and_evaluate(self, X_train, X_val, y_train, y_val):
+        """Train models for each category and evaluate them"""
+        self.models = {}
+        self.results = {}
+
+        for i, category in enumerate(self.category_names):
+            print(f"\nEvaluating {category} classifier...")
+
+            # Train model
+            # Calculate class weights
+            unique, counts = np.unique(y_train[:, i], return_counts=True)
+            class_weight = dict(zip(unique, len(y_train) / (len(unique) * counts)))
+
+            # Initialize model with balanced class weights
+            model = RandomForestClassifier(
+                n_estimators=100,
+                random_state=42,
+                class_weight=class_weight,
+                n_jobs=-1,  # Use all available cores
+            )
+            model.fit(X_train, y_train[:, i])
+            self.models[category] = model
+
+            # Get predictions
+            y_pred = model.predict(X_val)
+            y_pred_proba = model.predict_proba(X_val)[:, 1]
+
+            # Calculate metrics
+            self.results[category] = {
+                "classification_report": classification_report(
+                    y_val[:, i], y_pred, output_dict=True
+                ),
+                "roc_auc": roc_auc_score(y_val[:, i], y_pred_proba),
+                "confusion_matrix": confusion_matrix(y_val[:, i], y_pred),
+                "predictions": y_pred,
+                "probabilities": y_pred_proba,
+            }
+
+            # Print results
+            print(f"\nResults for {category}:")
+            print(f"ROC-AUC Score: {self.results[category]['roc_auc']:.3f}")
+            print("\nClassification Report:")
+            print(classification_report(y_val[:, i], y_pred, zero_division=0))
+
+            # Print class distribution
+            unique, counts = np.unique(y_val[:, i], return_counts=True)
+            print(f"\nClass distribution in validation set:")
+            print(dict(zip(unique, counts)))
+            print(
+                f"Positive class ratio: {counts[1] / len(y_val) if 1 in unique else 0:.3%}"
+            )
+
+    def plot_confusion_matrices(self):
+        """Plot confusion matrices for all categories"""
+        n_cats = len(self.category_names)
+        fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+        axes = axes.ravel()
+
+        for i, category in enumerate(self.category_names):
+            cm = self.results[category]["confusion_matrix"]
+            sns.heatmap(cm, annot=True, fmt="d", ax=axes[i], cmap="Blues")
+            axes[i].set_title(f"Confusion Matrix - {category}")
+            axes[i].set_ylabel("True Label")
+            axes[i].set_xlabel("Predicted Label")
+
+        plt.tight_layout()
+        plt.show()
+
+    def plot_roc_curves(self, X_val, y_val):
+        """Plot ROC curves for all categories"""
+        plt.figure(figsize=(10, 6))
+
+        for i, category in enumerate(self.category_names):
+            model = self.models[category]
+            y_pred_proba = model.predict_proba(X_val)[:, 1]
+
+            fpr, tpr, _ = roc_curve(y_val[:, i], y_pred_proba)
+            plt.plot(
+                fpr,
+                tpr,
+                label=f"{category} (AUC = {self.results[category]['roc_auc']:.2f})",
+            )
+
+        plt.plot([0, 1], [0, 1], "k--")
+        plt.xlabel("False Positive Rate")
+        plt.ylabel("True Positive Rate")
+        plt.title("ROC Curves for All Categories")
+        plt.legend()
+        plt.show()
+
+    def analyze_feature_importance(self, feature_names=None):
+        """Analyze feature importance for each category"""
+        if feature_names is None:
+            feature_names = [f"feature_{i}" for i in range(X_train.shape[1])]
+
+        # TODO: Rethink significance of these plots
+        for category in self.category_names:
+            model = self.models[category]
+            importance = model.feature_importances_
+
+            # Get top 10 features
+            top_indices = importance.argsort()[-10:][::-1]
+
+            plt.figure(figsize=(10, 6))
+            plt.bar(range(10), importance[top_indices])
+            plt.xticks(range(10), [feature_names[i] for i in top_indices], rotation=45)
+            plt.title(f"Top 10 Important Features - {category}")
+            plt.tight_layout()
+            plt.show()
+
+    def analyze_misclassifications(self, X_val, y_val, texts):
+        """Analyze misclassified examples for each category"""
+        for i, category in enumerate(self.category_names):
+            predictions = self.results[category]["predictions"]
+            probabilities = self.results[category]["probabilities"]
+
+            # Find misclassifications
+            misclassified = predictions != y_val[:, i]
+
+            # Create DataFrame with misclassified examples
+            misclassified_df = pd.DataFrame(
+                {
+                    "text": texts[misclassified],
+                    "true_label": y_val[misclassified, i],
+                    "predicted_proba": probabilities[misclassified],
+                }
+            )
+
+            # Print examples of false positives and false negatives
+            print(f"\nMisclassification Analysis for {category}:")
+
+            false_positives = misclassified_df[misclassified_df["true_label"] == 0]
+            false_negatives = misclassified_df[misclassified_df["true_label"] == 1]
+
+            print("\nFalse Positives (Non-toxic classified as toxic):")
+            for _, row in false_positives.head(3).iterrows():
+                print(f"Text: {row['text']}")
+                print(f"Confidence: {row['predicted_proba']:.3f}\n")
+
+            print("\nFalse Negatives (Toxic classified as non-toxic):")
+            for _, row in false_negatives.head(3).iterrows():
+                print(f"Text: {row['text']}")
+                print(f"Confidence: {row['predicted_proba']:.3f}\n")
+
+
+evaluator = ToxicityModelEvaluator()
+evaluator.train_and_evaluate(X_train, X_val, y_train, y_val)
+evaluator.plot_confusion_matrices()
+evaluator.plot_roc_curves(X_val, y_val)
+evaluator.analyze_feature_importance()
+
+# Analyze misclassifications
+# TODO: Size
+evaluator.analyze_misclassifications(
+    X_val, y_val, train.head(2000)["comment_text"].values[len(X_train) :]
+)
+
+performance_summary = pd.DataFrame(
+    {
+        "Category": evaluator.category_names,
+        "ROC_AUC": [
+            evaluator.results[cat]["roc_auc"] for cat in evaluator.category_names
+        ],
+        "Precision": [
+            evaluator.results[cat]["classification_report"]["1"]["precision"]
+            for cat in evaluator.category_names
+        ],
+        "Recall": [
+            evaluator.results[cat]["classification_report"]["1"]["recall"]
+            for cat in evaluator.category_names
+        ],
+        "F1_Score": [
+            evaluator.results[cat]["classification_report"]["1"]["f1-score"]
+            for cat in evaluator.category_names
+        ],
+    }
+)
+
+print("\nOverall Performance Summary:")
+print(performance_summary.to_string(index=False))
+
+# %%
