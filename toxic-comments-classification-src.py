@@ -772,25 +772,40 @@ loaded_features, loaded_stats = IdentityProcessor.load_processed_data(
 )
 
 # %% [markdown]
-# # Text Normalization
+#  # Text Normalization
 
 # %% [markdown]
-# 1. Identity-Aware Normalization:
-# - Preserves identity terms and their case
-# - Custom stopword list that excludes identity terms
-# - Tracks context around identity mentions
+#  1. Identity-Aware Normalization:
+#
+#  - Preserves identity terms and their case
+#
+#  - Custom stopword list that excludes identity terms
+#
+#  - Tracks context around identity mentions
 #
 #
-# 2. Polarity and Negation:
-# - Handles negations ("not", "never", etc.)
-# - Marks negated terms
-# - Tracks negation context around identity terms
 #
 #
-# 3. Feature Generation:
-# - Creates polarity features
-# - Tracks positive/negative contexts
-# - Preserves important linguistic markers
+#
+#  2. Polarity and Negation:
+#
+#  - Handles negations ("not", "never", etc.)
+#
+#  - Marks negated terms
+#
+#  - Tracks negation context around identity terms
+#
+#
+#
+#
+#
+#  3. Feature Generation:
+#
+#  - Creates polarity features
+#
+#  - Tracks positive/negative contexts
+#
+#  - Preserves important linguistic markers
 
 # %%
 import re
@@ -1091,7 +1106,7 @@ class TextNormalizer:
 
 
 # %% [markdown]
-# Example
+#  Example
 
 # %%
 # Import required libraries
@@ -1146,6 +1161,7 @@ print(normalized_df.columns.tolist())
 print("\nSample of processed data:")
 print(normalized_df.head(2).to_string())
 
+
 # %%
 # First ensure we have punkt downloaded
 nltk.download("punkt")
@@ -1194,26 +1210,45 @@ for i in range(min(5, len(identity_toxic_comments))):
     )
     print("-" * 80)
 
+
 # %% [markdown]
-# # Feature Engineering
-# 1. Linguistic Features:
-# - Sentence structure metrics
-# - POS tag distributions
-# - Dependency parse features
-# - Text complexity metrics
+#  # Feature Engineering
+#
+#  1. Linguistic Features:
+#
+#  - Sentence structure metrics
+#
+#  - POS tag distributions
+#
+#  - Dependency parse features
+#
+#  - Text complexity metrics
 #
 #
-# 2. Bias-Aware Features:
-# - Pattern matching for bias indicators
-# - Identity term context analysis
-# - Stereotyping pattern detection
-# - Group generalization metrics
 #
-# 3. Text Representation:
-# - TF-IDF features
-# - Word n-grams
-# - Character n-grams
-# - Position-aware features
+#
+#
+#  2. Bias-Aware Features:
+#
+#  - Pattern matching for bias indicators
+#
+#  - Identity term context analysis
+#
+#  - Stereotyping pattern detection
+#
+#  - Group generalization metrics
+#
+#
+#
+#  3. Text Representation:
+#
+#  - TF-IDF features
+#
+#  - Word n-grams
+#
+#  - Character n-grams
+#
+#  - Position-aware features
 
 # %%
 import spacy
@@ -1613,13 +1648,199 @@ for col in sorted(new_columns):
 # Save the features
 train_features.to_pickle("combined_features.pkl")
 
-# %% [markdown]
-# # Embedding approach
 
 # %%
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import classification_report, confusion_matrix, roc_auc_score
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# Load the features we created
+train_features = pd.read_pickle("combined_features.pkl")
+
+# Select manual features for model training
+feature_columns = [
+    # Basic linguistic features
+    "word_count",
+    "avg_word_length",
+    "sentence_count",
+    "uppercase_ratio",
+    "punctuation_ratio",
+    # Toxicity features
+    "personal_attack_score",
+    "hate_pattern_count",
+    "aggressive_word_ratio",
+    # Bias features
+    "stereotype_pattern_count",
+    "generalization_ratio",
+    # Syntax features
+    "verb_ratio",
+    "adj_ratio",
+    "adv_ratio",
+    "pronoun_ratio",
+    "imperative_count",
+    # Emotion features
+    "anger_ratio",
+    "disgust_ratio",
+    "fear_ratio",
+    "joy_ratio",
+    "sadness_ratio",
+    # Identity features
+    "identity_term_count",
+    "has_identity_terms",
+    "identity_context_sentiment",
+    "gender_mentions",
+    "race_ethnicity_mentions",
+    "religion_mentions",
+    "age_mentions",
+    "disability_mentions",
+    # Polarity features
+    "negation_count",
+    "identity_in_negation",
+    "identity_positive_context",
+    "identity_negative_context",
+]
+
+# Prepare features and targets
+X = train_features[feature_columns]
+y = train_features[
+    ["toxic", "severe_toxic", "obscene", "threat", "insult", "identity_hate"]
+]
+
+# Split the data
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42
+)
+
+# Scale the features
+scaler = StandardScaler()
+X_train_scaled = scaler.fit_transform(X_train)
+X_test_scaled = scaler.transform(X_test)
+
+# Initialize results dictionary
+results = {}
+
+# Train and evaluate for each toxicity category
+for category in y.columns:
+    print(f"\nEvaluating {category} classifier...")
+
+    # Get class distribution
+    print(f"Class distribution:")
+    print(y_train[category].value_counts(normalize=True))
+
+    # Initialize and train model with class weights
+    class_weights = dict(
+        zip(
+            y_train[category].unique(),
+            len(y_train[category])
+            / (len(y_train[category].unique()) * y_train[category].value_counts()),
+        )
+    )
+
+    model = RandomForestClassifier(
+        n_estimators=200,
+        max_depth=10,
+        min_samples_split=10,
+        min_samples_leaf=5,
+        class_weight=class_weights,
+        random_state=42,
+        n_jobs=-1,
+    )
+
+    model.fit(X_train_scaled, y_train[category])
+
+    # Make predictions
+    y_pred = model.predict(X_test_scaled)
+    y_pred_proba = model.predict_proba(X_test_scaled)[:, 1]
+
+    # Calculate metrics
+    results[category] = {
+        "classification_report": classification_report(
+            y_test[category], y_pred, output_dict=True
+        ),
+        "confusion_matrix": confusion_matrix(y_test[category], y_pred),
+        "roc_auc": roc_auc_score(y_test[category], y_pred_proba),
+        "feature_importance": dict(zip(feature_columns, model.feature_importances_)),
+    }
+
+    # Print results
+    print(f"\nResults for {category}:")
+    print(f"ROC-AUC Score: {results[category]['roc_auc']:.3f}")
+    print("\nClassification Report:")
+    print(classification_report(y_test[category], y_pred))
+
+    # Plot confusion matrix
+    plt.figure(figsize=(8, 6))
+    sns.heatmap(
+        results[category]["confusion_matrix"], annot=True, fmt="d", cmap="Blues"
+    )
+    plt.title(f"Confusion Matrix - {category}")
+    plt.ylabel("True Label")
+    plt.xlabel("Predicted Label")
+    plt.show()
+
+    # Plot top 10 important features
+    importance_df = (
+        pd.DataFrame(
+            {"feature": feature_columns, "importance": model.feature_importances_}
+        )
+        .sort_values("importance", ascending=False)
+        .head(10)
+    )
+
+    plt.figure(figsize=(10, 6))
+    sns.barplot(data=importance_df, x="importance", y="feature")
+    plt.title(f"Top 10 Important Features - {category}")
+    plt.tight_layout()
+    plt.show()
+
+# Create summary DataFrame
+summary_df = pd.DataFrame(
+    {
+        "Category": list(results.keys()),
+        "ROC_AUC": [results[cat]["roc_auc"] for cat in results],
+        "Precision": [
+            results[cat]["classification_report"]["1"]["precision"] for cat in results
+        ],
+        "Recall": [
+            results[cat]["classification_report"]["1"]["recall"] for cat in results
+        ],
+        "F1_Score": [
+            results[cat]["classification_report"]["1"]["f1-score"] for cat in results
+        ],
+    }
+)
+
+print("\nOverall Performance Summary:")
+print(summary_df.to_string(index=False))
+
+# TODO: Extract to markdown
+# Compare with the BERT embeddings results
+print("\nComparison with BERT embeddings approach:")
+print("Manual features advantages:")
+print("1. Interpretable features with clear importance rankings")
+print("2. Faster training and inference")
+print("3. More explainable decisions")
+print("4. Lower computational requirements")
+
+print("\nManual features limitations:")
+print("1. May miss subtle patterns that BERT can capture")
+print("2. Requires extensive feature engineering")
+print("3. Less flexible for different types of toxic content")
+print("4. May need regular updates to patterns and rules")
+
+# %% [markdown]
+#  # Embedding approach
+
+# %%
+import pandas as pd
+import numpy as np
+from sklearn.model_selection import train_test_split
+
 train = pd.read_csv("data/train.csv")
 
 # Split data into toxic and non-toxic
@@ -1630,6 +1851,7 @@ non_toxic_comments = train[~toxic_mask]["comment_text"]
 print(f"Toxic comments: {len(toxic_comments)}")
 print(f"Non-toxic comments: {len(non_toxic_comments)}")
 
+
 # %%
 # Create train/validation split
 from sklearn.model_selection import train_test_split
@@ -1638,6 +1860,7 @@ import torch
 import os
 import numpy as np
 import pandas as pd
+
 
 class EmbeddingProcessor:
     def __init__(self):
@@ -1673,6 +1896,7 @@ class EmbeddingProcessor:
                 print(f"Processed {i + batch_size}/{len(df)} texts")
 
         return np.vstack(embeddings)
+
 
 class EnhancedEmbeddingProcessor(EmbeddingProcessor):
     def get_embeddings(self, df, save_path="embeddings.npy", batch_size=32):
@@ -1717,11 +1941,11 @@ def prepare_training_data(df, embeddings, test_size=0.2):
 # TODO: Fix the size of the data
 processor = EnhancedEmbeddingProcessor()
 train_embeddings = processor.get_embeddings(
-    train.head(2000), save_path="train_embeddings-2000.npy"
+    train.head(10000), save_path="train_embeddings-10000.npy"
 )
 
 X_train, X_val, y_train, y_val = prepare_training_data(
-    train.head(2000), train_embeddings
+    train.head(10000), train_embeddings
 )
 
 print("Training set shape:", X_train.shape)
@@ -1729,13 +1953,14 @@ print("Validation set shape:", X_val.shape)
 print("Training labels shape:", y_train.shape)
 print("Validation labels shape:", y_val.shape)
 
+
 # %%
 import numpy as np
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 
 # Analyze embeddings distribution between toxic and non-toxic comments
-toxic_mask = train["toxic"] == 1
+toxic_mask = train["toxic"].head(10000) == 1
 toxic_embeddings = train_embeddings[toxic_mask]
 non_toxic_embeddings = train_embeddings[~toxic_mask]
 
@@ -1747,28 +1972,34 @@ print("Non-toxic examples:", len(non_toxic_embeddings))
 pca = PCA(n_components=2)
 embeddings_2d = pca.fit_transform(train_embeddings)
 
-# %% [markdown]
-# - Each comment is tokenized into words/subwords
-# - BERT processes these tokens and produces embeddings for each token
-# - The [CLS] token (at position 0) acts as an aggregate representation of the entire comment
-# - We get this [CLS] token embedding which is 768-dimensional
-#     - The number 768 comes from BERT's architecture - specifically, it's the size of BERT-base's hidden layers
 
 # %% [markdown]
-# # TFIDF
+#  - Each comment is tokenized into words/subwords
+#
+#  - BERT processes these tokens and produces embeddings for each token
+#
+#  - The [CLS] token (at position 0) acts as an aggregate representation of the entire comment
+#
+#  - We get this [CLS] token embedding which is 768-dimensional
+#
+#      - The number 768 comes from BERT's architecture - specifically, it's the size of BERT-base's hidden layers
+
+# %% [markdown]
+#  # TFIDF
 
 # %%
 from sklearn.feature_extraction.text import TfidfVectorizer
 
 # Create TF-IDF features
 tfidf = TfidfVectorizer(max_features=1000, ngram_range=(1, 2))
-tfidf_features = tfidf.fit_transform(train["comment_text"]).toarray()
+tfidf_features = tfidf.fit_transform(train["comment_text"].head(10000)).toarray()
 
 print("TF-IDF features shape:", tfidf_features.shape)
 
 # Combine features
 combined_features = np.hstack([train_embeddings, tfidf_features])
 print("Combined features shape:", combined_features.shape)
+
 
 # %%
 from sklearn.ensemble import RandomForestClassifier
@@ -1778,7 +2009,7 @@ import seaborn as sns
 
 # 1. First, let's use a Random Forest to get feature importance
 rf_classifier = RandomForestClassifier(n_estimators=100, random_state=42)
-rf_classifier.fit(train_embeddings, train["toxic"])
+rf_classifier.fit(train_embeddings, train["toxic"].head(10000))
 
 # Get feature importances
 importances = rf_classifier.feature_importances_
@@ -1799,7 +2030,7 @@ plt.show()
 
 # 2. Let's analyze the correlation between embeddings and toxicity
 correlations = []
-toxic_labels = train["toxic"].values
+toxic_labels = train["toxic"].head(10000).values
 
 for i in range(train_embeddings.shape[1]):
     correlation = np.corrcoef(train_embeddings[:, i], toxic_labels)[0, 1]
@@ -1870,9 +2101,9 @@ def analyze_patterns():
     # Create DataFrame with texts and their scores
     analysis_df = pd.DataFrame(
         {
-            "text": train["comment_text"],
+            "text": train["comment_text"].head(10000),
             "toxic_score": toxic_scores,
-            "is_toxic": train["toxic"],
+            "is_toxic": train["toxic"].head(10000),
         }
     )
 
@@ -1896,9 +2127,9 @@ def analyze_patterns():
 
 analysis_results = analyze_patterns()
 
-# %% [markdown]
-# ## feature interpreration
 
+# %% [markdown]
+#  ## feature interpreration
 
 # %%
 def interpret_important_features(text_examples):
@@ -1937,8 +2168,9 @@ correct_toxics = analysis_results[
 
 interpret_important_features(correct_toxics[:3])  # Take first 3 examples
 
+
 # %% [markdown]
-# ### Misclassified
+#  ### Misclassified
 
 
 # %%
@@ -2005,9 +2237,9 @@ def analyze_prediction_confidence():
     # Create DataFrame with predictions and actual values
     confidence_df = pd.DataFrame(
         {
-            "text": train["comment_text"],
+            "text": train["comment_text"].head(10000),
             "toxic_probability": probabilities[:, 1],  # Probability of being toxic
-            "actual": train["toxic"],
+            "actual": train["toxic"].head(10000),
         }
     )
 
@@ -2053,7 +2285,9 @@ def analyze_high_confidence_cases():
         print(f"Predicted Probability: {row['toxic_probability']:.3f}")
         print(f"Actual: {'Toxic' if row['actual'] == 1 else 'Non-toxic'}")
 
+
 analyze_high_confidence_cases()
+
 
 # %%
 import numpy as np
@@ -2237,7 +2471,7 @@ evaluator.analyze_feature_importance()
 # Analyze misclassifications
 # TODO: Size
 evaluator.analyze_misclassifications(
-    X_val, y_val, train.head(2000)["comment_text"].values[len(X_train) :]
+    X_val, y_val, train.head(10000)["comment_text"].values[len(X_train) :]
 )
 
 performance_summary = pd.DataFrame(
@@ -2263,5 +2497,432 @@ performance_summary = pd.DataFrame(
 
 print("\nOverall Performance Summary:")
 print(performance_summary.to_string(index=False))
+
+
+# %% [markdown]
+# # LSTM
+
+# %%
+
+import os
+
+# Disable GPU and suppress TensorFlow warnings for stability
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
+
+import numpy as np
+import pandas as pd
+from sklearn.model_selection import train_test_split
+from tensorflow.keras.preprocessing.text import Tokenizer
+from tensorflow.keras.preprocessing.sequence import pad_sequences
+from tensorflow.keras.layers import (
+    Input,
+    LSTM,
+    Dense,
+    Embedding,
+    Dropout,
+    Bidirectional,
+    SpatialDropout1D,
+    BatchNormalization,
+    Activation,
+    Lambda,
+    RepeatVector,
+    Permute,
+    Flatten,
+    multiply,
+    GlobalAveragePooling1D,
+)
+from tensorflow.keras.models import Model
+from tensorflow.keras.optimizers import Adam
+import tensorflow as tf
+from sklearn.metrics import (
+    classification_report,
+    f1_score,
+    precision_score,
+    recall_score,
+)
+import tensorflow.keras.backend as K
+
+
+class DataAnalyzer:
+    """
+    Analyzes text data to determine optimal model parameters and class distributions.
+    """
+
+    @staticmethod
+    def analyze_vocabulary_size(texts):
+        tokenizer = Tokenizer()
+        tokenizer.fit_on_texts(texts)
+
+        # Analyze word frequencies
+        word_counts = pd.Series(tokenizer.word_counts)
+        total_words = len(word_counts)
+        # Find number of words needed for 90% coverage
+        coverage_90 = word_counts.sort_values(ascending=False).cumsum()
+        coverage_90 = coverage_90[coverage_90 <= 0.9 * coverage_90.sum()].count()
+
+        print(f"Total unique words: {total_words}")
+        print(f"Words needed for 90% coverage: {coverage_90}")
+        return coverage_90
+
+    @staticmethod
+    def analyze_sequence_length(texts):
+        # Calculate length of each text
+        lengths = texts.str.split().str.len()
+
+        print("Text length statistics:")
+        print(f"Mean length: {lengths.mean():.1f} words")
+        print(f"Median length: {lengths.median():.1f} words")
+        print(f"95th percentile: {lengths.quantile(0.95):.1f} words")
+
+        return lengths.quantile(0.95).astype(int)
+
+    @staticmethod
+    def analyze_class_distribution(y):
+        """Analyzes class distribution and prints statistics."""
+        class_names = [
+            "toxic",
+            "severe_toxic",
+            "obscene",
+            "threat",
+            "insult",
+            "identity_hate",
+        ]
+        print("\nClass Distribution Analysis:")
+        for i, name in enumerate(class_names):
+            pos_count = np.sum(y[:, i])
+            total = len(y)
+            print(
+                f"{name}: {pos_count} positive samples ({pos_count / total * 100:.2f}%)"
+            )
+
+    @staticmethod
+    def get_optimal_parameters(texts):
+        """Determines optimal model parameters based on data characteristics."""
+        # Analyze vocabulary
+        vocab_size = DataAnalyzer.analyze_vocabulary_size(texts)
+        max_features = min(int(vocab_size * 1.2), 200000)  # Add 20% buffer
+
+        # Analyze sequence length
+        maxlen = DataAnalyzer.analyze_sequence_length(texts)
+
+        # Choose embedding size based on vocabulary size
+        if max_features < 50000:
+            embed_size = 100
+        elif max_features < 100000:
+            embed_size = 200
+        else:
+            embed_size = 300
+
+        return max_features, maxlen, embed_size
+
+
+class TextPreprocessor:
+    """Handles text preprocessing with safeguards against data leakage."""
+
+    def __init__(self, max_features):
+        self.tokenizer = Tokenizer(num_words=max_features)
+        self.is_fitted = False
+        self.max_features = max_features
+        self.maxlen = None
+
+    def fit_transform(self, texts, maxlen):
+        """Fits tokenizer on training data and transforms it."""
+        self.maxlen = maxlen
+        self.tokenizer.fit_on_texts(texts)
+        self.is_fitted = True
+        return self._transform(texts)
+
+    def transform(self, texts):
+        """Transforms test data using the training-fitted tokenizer."""
+        if not self.is_fitted:
+            raise ValueError("Tokenizer must be fitted on training data first!")
+        return self._transform(texts)
+
+    def _transform(self, texts):
+        """Internal method for text transformation."""
+        sequences = self.tokenizer.texts_to_sequences(texts)
+        return pad_sequences(sequences, maxlen=self.maxlen)
+
+
+def build_model(max_features, maxlen, embed_size):
+    """Builds an improved LSTM model with attention mechanism."""
+    # Input layer
+    comment_input = Input(shape=(maxlen,), dtype="int32", name="comment_input")
+
+    # Embedding layer with spatial dropout to reduce overfitting on word embeddings
+    x = Embedding(max_features, embed_size)(comment_input)
+    x = SpatialDropout1D(0.2)(x)
+
+    # Bidirectional LSTM layers
+    lstm_1 = Bidirectional(LSTM(128, return_sequences=True))(x)
+    lstm_2 = Bidirectional(LSTM(64, return_sequences=True))(lstm_1)
+
+    # Attention mechanism
+    attention = Dense(1, activation="tanh")(lstm_2)
+    attention = Flatten()(attention)
+    attention = Activation("softmax")(attention)
+    attention = RepeatVector(128)(attention)
+    attention = Permute([2, 1])(attention)
+
+    # Merge attention with LSTM output
+    sent_representation = multiply([lstm_2, attention])
+    sent_representation = GlobalAveragePooling1D()(sent_representation)
+
+    # Dense layers with batch normalization
+    x = Dense(256)(sent_representation)
+    x = BatchNormalization()(x)
+    x = Activation("relu")(x)
+    x = Dropout(0.3)(x)
+
+    x = Dense(128)(x)
+    x = BatchNormalization()(x)
+    x = Activation("relu")(x)
+    x = Dropout(0.3)(x)
+
+    # Output layer
+    output = Dense(6, activation="sigmoid")(x)
+
+    return Model(inputs=comment_input, outputs=output)
+
+
+def get_category_specific_parameters():
+    """
+    Defines category-specific parameters for threshold optimization and class weighting.
+    These parameters are carefully tuned based on the characteristics of each category.
+    """
+    return {
+        "toxic": {
+            "threshold_range": (0.3, 0.7),
+            "weight_multiplier": 2,
+            "focal_alpha": 0.25,
+        },
+        "severe_toxic": {
+            "threshold_range": (0.4, 0.8),
+            "weight_multiplier": 3,
+            "focal_alpha": 0.3,
+        },
+        "threat": {
+            "threshold_range": (0.3, 0.5),  # More lenient threshold
+            "weight_multiplier": 2.5,  # Increase weight
+            "focal_alpha": 0.4,
+        },
+        "identity_hate": {
+            "threshold_range": (0.6, 0.8),  # More conservative
+            "weight_multiplier": 1.5,
+            "focal_alpha": 0.35,
+        },
+        "obscene": {
+            "threshold_range": (0.4, 0.7),
+            "weight_multiplier": 2,
+            "focal_alpha": 0.25,
+        },
+        "insult": {
+            "threshold_range": (0.4, 0.7),
+            "weight_multiplier": 2,
+            "focal_alpha": 0.25,
+        },
+    }
+
+
+def focal_loss(gamma=2.0, alpha=0.25):
+    """
+    Implements focal loss for better handling of hard examples and class imbalance.
+    gamma: Focusing parameter that reduces loss contribution from easy examples
+    alpha: Balancing parameter for positive/negative classes
+    """
+
+    def focal_loss_fixed(y_true, y_pred):
+        pt_1 = tf.where(tf.equal(y_true, 1), y_pred, tf.ones_like(y_pred))
+        pt_0 = tf.where(tf.equal(y_true, 0), y_pred, tf.zeros_like(y_pred))
+
+        epsilon = K.epsilon()
+        pt_1 = K.clip(pt_1, epsilon, 1.0 - epsilon)
+        pt_0 = K.clip(pt_0, epsilon, 1.0 - epsilon)
+
+        return -K.mean(alpha * K.pow(1.0 - pt_1, gamma) * K.log(pt_1)) - K.mean(
+            (1 - alpha) * K.pow(pt_0, gamma) * K.log(1.0 - pt_0)
+        )
+
+    return focal_loss_fixed
+
+
+def get_optimal_thresholds(y_true, y_pred):
+    """Enhanced threshold optimization with category-specific ranges"""
+    category_params = get_category_specific_parameters()
+    thresholds = []
+
+    for i, category in enumerate(
+        ["toxic", "severe_toxic", "obscene", "threat", "insult", "identity_hate"]
+    ):
+        params = category_params[category]
+        best_f1 = 0
+        best_threshold = 0.5
+
+        # Use category-specific threshold range
+        for threshold in np.arange(
+            params["threshold_range"][0], params["threshold_range"][1], 0.05
+        ):
+            pred = (y_pred[:, i] > threshold).astype(int)
+
+            # For very rare categories, weight precision more heavily
+            if category in ["threat", "identity_hate"]:
+                precision = precision_score(y_true[:, i], pred, zero_division=0)
+                recall = recall_score(y_true[:, i], pred)
+                f1 = (
+                    (2 * precision * recall) / (precision + recall)
+                    if (precision + recall) > 0
+                    else 0
+                )
+            else:
+                f1 = f1_score(y_true[:, i], pred)
+
+            if f1 > best_f1:
+                best_f1 = f1
+                best_threshold = threshold
+
+        thresholds.append(best_threshold)
+
+    return thresholds
+
+
+def train_model(train_df, test_size=0.2, random_state=42):
+    """
+    Trains the model with improved handling of class imbalance.
+    """
+    # Get optimal parameters based on data analysis
+    max_features, maxlen, embed_size = DataAnalyzer.get_optimal_parameters(
+        train_df["comment_text"]
+    )
+    print("\nOptimal parameters:")
+    print(f"Max features (vocabulary size): {max_features}")
+    print(f"Max sequence length: {maxlen}")
+    print(f"Embedding dimensions: {embed_size}\n")
+
+    # Split raw data first
+    X = train_df["comment_text"]
+    y = train_df[
+        ["toxic", "severe_toxic", "obscene", "threat", "insult", "identity_hate"]
+    ].values
+
+    # Analyze class distribution
+    DataAnalyzer.analyze_class_distribution(y)
+
+    # Split data with stratification
+    X_train, X_test, y_train, y_test = train_test_split(
+        X,
+        y,
+        test_size=test_size,
+        random_state=random_state,
+        stratify=y[:, 0],  # Stratify by toxic label
+    )
+
+    # Preprocess text data
+    preprocessor = TextPreprocessor(max_features=max_features)
+    X_train_processed = preprocessor.fit_transform(X_train, maxlen)
+    X_test_processed = preprocessor.transform(X_test)
+
+    # Build and compile model
+    model = build_model(max_features, maxlen, embed_size)
+
+    losses = {}
+    metrics = {}
+    category_params = get_category_specific_parameters()
+    # Print evaluation results
+    categories = [
+        "toxic",
+        "severe_toxic",
+        "obscene",
+        "threat",
+        "insult",
+        "identity_hate",
+    ]
+
+    for i, category in enumerate(categories):
+        params = category_params[category]
+        losses[category] = focal_loss(gamma=2.0, alpha=params["focal_alpha"])
+        metrics[category] = ["accuracy", tf.keras.metrics.AUC()]
+
+    # Compile model with category-specific parameters
+    model.compile(
+        loss=focal_loss(gamma=2.0, alpha=0.25),  # Single loss function
+        optimizer=Adam(learning_rate=0.001),
+        metrics=["accuracy", tf.keras.metrics.AUC()],
+    )
+
+    # Train model with class weights and callbacks
+    history = model.fit(
+        X_train_processed,
+        y_train,
+        batch_size=32,
+        epochs=10,
+        validation_data=(X_test_processed, y_test),
+        callbacks=[
+            tf.keras.callbacks.EarlyStopping(
+                monitor="val_loss", patience=3, restore_best_weights=True
+            ),
+            tf.keras.callbacks.ReduceLROnPlateau(
+                monitor="val_loss", factor=0.5, patience=2, min_lr=0.00001
+            ),
+        ],
+    )
+
+    # Get predictions and find optimal thresholds
+    predictions = model.predict(X_test_processed)
+    predictions_dict = {
+        category: pred for category, pred in zip(categories, predictions)
+    }
+    # Convert predictions to numpy array for threshold optimization
+    predictions_array = np.column_stack([pred.flatten() for pred in predictions])
+    thresholds = get_optimal_thresholds(y_test, predictions)
+
+    # Apply optimal thresholds for final predictions
+    predictions_binary = predictions > np.array(thresholds)
+
+    print("\nDetailed Model Evaluation Results:")
+    for i, category in enumerate(categories):
+        print(f"\n{'=' * 50}")
+        print(f"Evaluation for {category.upper()}:")
+        print(f"Using optimized threshold: {thresholds[i]:.3f}")
+        print(
+            classification_report(
+                y_test[:, i], predictions_binary[:, i], zero_division=0, digits=4
+            )
+        )
+
+        # Detailed prediction analysis
+        positive_samples = np.sum(y_test[:, i])
+        total_samples = len(y_test[:, i])
+        predicted_positive = np.sum(predictions_binary[:, i])
+
+        print(f"\nClass Distribution Analysis for {category}:")
+        print(
+            f"True positive samples: {positive_samples} ({(positive_samples / total_samples) * 100:.2f}%)"
+        )
+        print(
+            f"Model predictions: {predicted_positive} ({(predicted_positive / total_samples) * 100:.2f}%)"
+        )
+
+        # Calculate confusion matrix metrics
+        true_positives = np.sum((y_test[:, i] == 1) & (predictions_binary[:, i] == 1))
+        false_positives = np.sum((y_test[:, i] == 0) & (predictions_binary[:, i] == 1))
+
+        print("\nPrediction Quality Metrics:")
+        print(f"True Positives: {true_positives}")
+        print(f"False Positives: {false_positives}")
+        if predicted_positive > 0:
+            print(f"Precision: {(true_positives / predicted_positive) * 100:.2f}%")
+
+    model.save("toxic_comment_model.keras")
+
+    return model, preprocessor, history, thresholds
+
+
+# %%
+# Load and prepare data
+train_df = pd.read_csv("data/train.csv")
+
+# Train model with all improvements
+model, preprocessor, history, thresholds = train_model(train_df.head(10000))
 
 # %%
