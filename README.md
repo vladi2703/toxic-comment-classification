@@ -32,7 +32,7 @@ The final preprocessing step involves creating sophisticated text representation
 
 # [V] Model Integration
 
-While the focus of this documentation is on preprocessing, it's worth noting that the preprocessed data feeds into multiple model architectures. The system primarily employs a Random Forest classifier for interpretability and an LSTM-based deep learning model for capturing complex sequential patterns. The preprocessing pipeline is designed to support both approaches, providing appropriate feature representations for each model type.
+While the focus of this documentation is on preprocessing, it's worth noting that the preprocessed data feeds into multiple model architectures. The system primarily employs a Random Forest classifier for interpretability and an LSTM-based deep learning model for capturing complex sequential patterns. Additionally, we implement a bidirectional LSTM model with attention mechanism for better sequence understanding, and experiment with BERT embeddings combined with Random Forest classification to leverage pre-trained language understanding. The BERT-based approach allows us to capture deeper semantic relationships. The preprocessing pipeline is designed to support all these approaches, providing appropriate feature representations for each model type. Detailed performance metrics including accuracy, precision, recall, and F1-scores for all model configurations can be found in the accompanying Jupyter notebook, along with comprehensive evaluation analyses and confusion matrices.
 
 ## Data Imbalance Handling
 
